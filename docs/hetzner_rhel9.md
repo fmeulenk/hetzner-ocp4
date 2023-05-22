@@ -8,24 +8,28 @@ Create a virtual machine and boot from the downloaded ISO. Once the `Anaconda In
 
 Adjust the filesystem layout to be more compatible with automation of this repository.
 
-Open the disk partitioning dialog and select `Manual Partitioning` and create the filesystem layout choosing the automation proposal and LVM.
+Open the disk installation destination dialog and select `Custom` under the `Storage Configuration` section.
 ![RHEL 9 disk layout 1](../images/rhel9_disk-layout-1.png)
 
-Once created, change the volume group for `root` and `swap` logical volume to `vg0`
-![RHEL 9 disk layout 2](../images/rhel9_disk-layout-2.png)
+Hit the Done button. Confirm that `New mount points will use the following partitioning scheme` says LVM and then select the `Click here to create them automatically` text.
+![RHEL 9 disk layout 1](../images/rhel9_disk-layout-2.png)
+
+Once created, change the volume group for `root` and `swap` logical volume to `vg0`. Select `Volume Group` Drop down, if vg0 does not exist `Create new volume group`.
+![RHEL 9 disk layout 2](../images/rhel9_disk-layout-3.png)
 
 When finished, it will look like this.
-![RHEL 9 disk layout 3](../images/rhel9_disk-layout-3.png)
+![RHEL 9 disk layout 3](../images/rhel9_disk-layout-4.png)
 
-Wait until the installation is finished and press reboot.
+Press Done. Accept changes. Begin Installation. Wait until the installation is finished and press reboot.
 
 ### Configure the system to match Hetzner requirements
 
 Once installed and rebooted, login with previously given credentials and adjust accordingly to meet Hetzner requirements.
 
-#### Install package dependencies and upgrade the OS to latest version
+#### Register system, install package dependencies and upgrade the OS to latest version
 
 ```shell
+# subscription-manager register --username $NAME
 # dnf install -y lvm2 mdadm tar bzip2
 # dnf upgrade 
 ```
@@ -88,7 +92,7 @@ Create the image-archive, which can be uploaded to the rescue-shell
 
 Boot the Hetzner system into the Rescue Shell, create `config.txt` and upload the image to your `/root` folder for use with the `installimage` tool.
 
-Based on the volume group name chosen during the image creation, one needs to adjust the `PART lvm vg0` in the `config.txt` file. Below is the example, based on the image created above.
+Based on the volume group name chosen during the image creation, one needs to adjust the `PART lvm vg0` in the `config.txt` file. Below is the example, based on the image created above. The name of the image should follow the used notation. Images beginning with `RHEL` won't work with `installimage`.
 
 ```txt
 DRIVE1 /dev/sda

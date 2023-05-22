@@ -2,154 +2,146 @@
 
 Some notes how you can setup a air-gapped / disconnected OpenShift 4 cluster with hetzner-ocp4
 
-## Create network
+## Create ait-gapped configuration file:
+To distiguish online & offline configuration file, let's create the file cluster-air-gapped.yml
 
-Create only the network, important to install and start the mirror registry add
-```
+Be sure that the following lines are defined in your configuration file:
+
+```yaml
 network_forward_mode: "route"
+vn_subnet: "192.168.50.0"
 ```
-into `cluster.yml` and setup the network:
+
+## Prepare the installation host
+To be sure that all packages are installed accordingly prepare your node:
+
+```bash
+# ansible-navigator run ./ansible/01-prepare-host.yml -e @cluster-air-gapped.yml
+```
+
+## Create network
 
 ```bash
 # ansible-navigator run ./ansible/02-create-cluster.yml \
-  [-e @cluster-air-gapped.yml \]
+  -e @cluster-air-gapped.yml \
   --tags network
 ```
 
 ## Setup mirror registry on kvm-host
 
-### via Office quay mirror registry
+### Using Red Hat Mirror Registry
 
 https://docs.openshift.com/container-platform/latest/installing/disconnected_install/installing-mirroring-creating-registry.html
 
+Prepare your node and create certificates for the registry and other stuff.
+```bash
+# ansible-navigator run ./docs/air-gapped/prep-mirror-registry.yaml -e @cluster-air-gapped.yml
 ```
-ansible-navigator run ./docs/air-gapped/prep-mirror-registry.yaml [-e @cluster-air-gapped.yml]
 
-./mirror-registry install \
+Download and extract the mirror-registry binary: (This is currently not done via Ansible)
+```bash
+mkdir ~/mirror
+cd ~/mirror
+wget https://developers.redhat.com/content-gateway/rest/mirror/pub/openshift-v4/clients/mirror-registry/latest/mirror-registry.tar.gz
+tar -xzvf mirror-registry.tar.gz
+```
+
+Create the Mirror Registry
+
+```bash
+./mirror-registry install -v \
   --quayHostname host.compute.local:5000 \
   --quayRoot /var/lib/libvirt/images/mirror-registry/quay/ \
   --ssh-key /root/.ssh/id_rsa \
   --sslKey /var/lib/libvirt/images/mirror-registry/certs/registry.key \
   --sslCert /var/lib/libvirt/images/mirror-registry/certs/registry.crt \
   --initPassword r3dh4t\!1
+```
 
+Login into the created registry and store the authentication information
+
+```bash
 podman login --username init --password r3dh4t\!1 \
   --authfile mirror-registry-pullsecret.json \
   host.compute.local:5000
 ```
 
-### via Docker registry - deprecated
-
-```
-./docs/air-gapped/setup-registry.yaml
-```
-
-Check registry
-```
-$ curl -u admin:r3dh4t\!1 https://host.compute.local:5000/v2/_catalog
-{"repositories":[]}
-```
-
-Create mirror registry pullsecret
-```
-podman login --username admin --password r3dh4t\!1 \
-  --authfile mirror-registry-pullsecret.json \
-  host.compute.local:5000
-```
-
-
 ## Download Red Hat pull secret
 
-Download Red Hat pull secret and store it in `redhat-pullsecret.json`
+Download Red Hat pull secret from cloud.redhat.com and store it in `redhat-pullsecret.json`
 
-## Mirror images
+## Concat redhat pull secret and the authfile created above
 
-Merge  mirror-registry-pullsecret.json & redhat-pullsecret.json
-```
-jq -s '{"auths": ( .[0].auths + .[1].auths ) }' mirror-registry-pullsecret.json redhat-pullsecret.json > pullsecret.json
-```
+Store the result in ~/.docker/config.json
 
-Install oc client
-```
-# ansible-navigator run ./ansible/02-create-cluster.yml \
-  [-e @cluster-air-gapped.yml \]
-  --tags network
+```bash
+mkdir ~/.docker
+jq -s '{"auths": ( .[0].auths + .[1].auths ) }' mirror-registry-pullsecret.json <path-to-your-redhat-pullsecret> > ~/.docker/config.json
 ```
 
-Mirror images:
-```
-export OCP_RELEASE=$(oc version -o json  --client | jq -r '.releaseClientVersion')
-export LOCAL_REGISTRY='host.compute.local:5000'
-export LOCAL_REPOSITORY='ocp4/openshift4'
-export PRODUCT_REPO='openshift-release-dev'
-export LOCAL_SECRET_JSON='pullsecret.json'
-export RELEASE_NAME="ocp-release"
-export ARCHITECTURE=x86_64
-# export REMOVABLE_MEDIA_PATH=<path>
+## Download OC Client
 
-# Try run:
+Download oc client, oc mirror pluging (and other stuff)
 
-oc adm release mirror \
-  --registry-config ${LOCAL_SECRET_JSON} \
-  --from quay.io/${PRODUCT_REPO}/${RELEASE_NAME}:${OCP_RELEASE}-${ARCHITECTURE} \
-  --to ${LOCAL_REGISTRY}/${LOCAL_REPOSITORY} \
-  --to-release-image ${LOCAL_REGISTRY}/${LOCAL_REPOSITORY}:${OCP_RELEASE}-${ARCHITECTURE} \
-  --dry-run
-
-oc adm release mirror \
-  --registry-config ${LOCAL_SECRET_JSON} \
-  --from quay.io/${PRODUCT_REPO}/${RELEASE_NAME}:${OCP_RELEASE}-${ARCHITECTURE} \
-  --to ${LOCAL_REGISTRY}/${LOCAL_REPOSITORY} \
-  --to-release-image ${LOCAL_REGISTRY}/${LOCAL_REPOSITORY}:${OCP_RELEASE}-${ARCHITECTURE}
+```bash
+ansible-navigator run ./ansible/02-create-cluster.yml -e @cluster-air-gapped.yml --tags download-openshift-artifacts
 ```
 
-Save the output:
-```
-info: Mirroring completed in 57.1s (81.95MB/s)
+## Mirror Images using oc-mirror plugin
 
-Success
-Update image:  host.compute.local:5000/ocp4/openshift4:4.2.0
-Mirror prefix: host.compute.local:5000/ocp4/openshift4
-
-To use the new mirrored repository to install, add the following section to the install-config.yaml:
-
-imageContentSources:
-- mirrors:
-  - host.compute.local:5000/ocp4/openshift4
-  source: quay.io/openshift-release-dev/ocp-release
-- mirrors:
-  - host.compute.local:5000/ocp4/openshift4
-  source: quay.io/openshift-release-dev/ocp-v4.0-art-dev
-
-
-To use the new mirrored repository for upgrades, use the following to create an ImageContentSourcePolicy:
-
-apiVersion: operator.openshift.io/v1alpha1
-kind: ImageContentSourcePolicy
-metadata:
-  name: example
-spec:
-  repositoryDigestMirrors:
-  - mirrors:
-    - host.compute.local:5000/ocp4/openshift4
-    source: quay.io/openshift-release-dev/ocp-release
-  - mirrors:
-    - host.compute.local:5000/ocp4/openshift4
-    source: quay.io/openshift-release-dev/ocp-v4.0-art-dev
+### Initialize the mirror configuration:
+```bash
+oc mirror init --registry host.compute.local:5000/mirror/oc-mirror-metadata > imageset-config.yaml
 ```
 
-Extract openshift-install command
-```
-oc adm release extract -a pullsecret.json --command=openshift-install "${LOCAL_REGISTRY}/${LOCAL_REPOSITORY}:${OCP_RELEASE}-${ARCHITECTURE}"
+This will create a configuration file like the following:
+
+```yaml
+kind: ImageSetConfiguration
+apiVersion: mirror.openshift.io/v1alpha2
+storageConfig:
+  registry:
+    imageURL: host.compute.local:5000/mirror/oc-mirror-metadata
+    skipTLS: false
+mirror:
+  platform:
+    channels:
+    - name: stable-4.12
+      type: ocp
+  operators: {}
+  additionalImages: {}
+  helm: {}
 ```
 
-Check openshift-install version:
+You can add additional Operators, Images or Charts.
+
+### Download Images to local disk
+
+I am downloading it to the local disk first ... just for fun
+```bash
+mkdir ~/mirror-data/
+oc mirror --config=./imageset-config.yaml file:///root/mirror-data/
 ```
-# ./openshift-install version
-./openshift-install 4.9.11
-built from commit 4ee186bb88bf6aeef8ccffd0b5d4e98e9ddd895f
-release image host.compute.local:5000/ocp4/openshift4@sha256:0f72e150329db15279a1aeda1286c9495258a4892bc5bf1bf5bb89942cd432de
-release architecture amd64
+
+This will download everything into your folder:
+```bash
+du -sh ~/mirror-data
+21G	~/mirror-data
+```
+
+*Note*: If you do not want to download everything locally, your can push them directly into the mirror registry by using `docker://registry.example:5000` instead of `file://...`
+
+### Push everything into the mirror registry
+```bash
+oc mirror --from=./mirror_seq1_000000.tar docker://host.compute.local:5000
+```
+
+## Extract `openshift-install` command
+
+```
+oc adm release extract -a ${LOCAL_SECRET_JSON} \
+  --command=openshift-install \
+  "host.compute.local:5000/openshift/release-images:4.12.4-x86_64"
 ```
 
 ## Update cluster.yml
